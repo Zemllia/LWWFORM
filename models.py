@@ -1,8 +1,8 @@
 import db
-import exceptions
+import fields
 import querysets
 from exceptions import QuerySetException
-from fields import IntegerField, CharField, FloatField, Field
+from fields import IntegerField, Field
 
 
 class BaseManager:
@@ -78,8 +78,8 @@ class MetaModel(type):
 
 
 class BaseModel(metaclass=MetaModel):
-    table_name = ""
-    id = IntegerField(null=False)
+    table_name = None
+    id = IntegerField(null=False, pk=True, unique=True, default=1)
 
     @property
     def pk(self):
@@ -116,8 +116,16 @@ class BaseModel(metaclass=MetaModel):
         cursor.execute(query)
         cursor.connection.commit()
 
+    def remove(self):
+        cursor = db.db_connection()
+        if self.__dict__.get("id") is not None:
+            query = f"DELETE FROM {self.table_name} WHERE id={self.__getattribute__('id')}"
+            cursor.execute(query)
+            cursor.connection.commit()
+        del self
+
     def __init__(self):
-        self.id = 1
+        self.id = None
 
     def __new__(cls, *args, **kwargs):
         rv = super().__new__(cls, *args, **kwargs)
@@ -153,9 +161,13 @@ class BaseModel(metaclass=MetaModel):
 
 
 class Employee(BaseModel):
-    table_name = "stocks"
-    date = CharField(null=True, max_length=255)
-    trans = CharField(null=False, max_length=100)
-    symbol = CharField(null=False, max_length=100)
-    qty = FloatField(null=False)
-    price = FloatField(null=False)
+    table_name = "employees"
+    first_name = fields.CharField()
+    last_name = fields.CharField()
+    salary = fields.FloatField(null=True)
+    age = fields.IntegerField()
+
+
+if __name__ == "__main__":
+    cur_employee = Employee.objects.get(id=3)
+    cur_employee.remove()
