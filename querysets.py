@@ -1,16 +1,20 @@
+import exceptions
 from exceptions import QuerySetException
+from fields import Field
 
 
 class BaseQuerySet:
     def __init__(self, model_class, existing_result):
-        from models import Field
         self.existing_result = []
         db_fields = [item for item in existing_result]
-        model_fields = [item for item in model_class.__dict__ if isinstance(model_class.__dict__[item], Field)]
-        print("-")
-        print(model_class)
-        print(model_fields)
-        print("-")
+        db_fields = [item for item in db_fields[0].keys()]
+        model_fields = [item for item in model_class.__dict__.keys() if isinstance(model_class.__dict__[item], Field)]
+        model_fields.append("id")
+
+        for item in model_fields:
+            if item not in db_fields:
+                raise exceptions.DBException(f"Field <{item}> does not exists in database")
+
         for row in existing_result:
             model_instance = model_class()
             for key in row.keys():

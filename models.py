@@ -2,6 +2,7 @@ import db
 import exceptions
 import querysets
 from exceptions import QuerySetException
+from fields import IntegerField, CharField, FloatField, Field
 
 
 class BaseManager:
@@ -25,7 +26,6 @@ class BaseManager:
             [f"{item}={kwargs[item]}" if not isinstance(kwargs[item], str) else f"{item}='{kwargs[item]}'" for item in
              kwargs])
         query = f"SELECT * FROM {self.model_class.table_name} WHERE {query_args};"
-        print(query)
         cursor = db.db_connection()
         cursor.execute(query)
         result = cursor.fetchall()
@@ -40,7 +40,6 @@ class BaseManager:
             [f"{item}!={kwargs[item]}" if not isinstance(kwargs[item], str) else f"{item}!='{kwargs[item]}'" for item in
              kwargs])
         query = f"SELECT * FROM {self.model_class.table_name} WHERE {query_args};"
-        print(query)
         cursor = db.db_connection()
         cursor.execute(query)
         result = cursor.fetchall()
@@ -55,12 +54,16 @@ class BaseManager:
         query_args = ' AND '.join(
             [f"{item}={kwargs[item]}" if not isinstance(kwargs[item], str) else f"{item}='{kwargs[item]}'" for item in
              kwargs])
-        query = f"SELECT * FROM {self.model_class.table_name} WHERE {query_args};"
+        query = f"SELECT * FROM {self.model_class.table_name} WHERE {query_args};".replace("None", "null")
         cursor = db.db_connection()
         cursor.execute(query)
-        result = cursor.fetchall()
-        qs = querysets.BaseQuerySet(self.model_class, result)
-        return qs[0] if len(qs) != 0 else None
+        result = cursor.fetchone()
+        if result is None:
+            return None
+        model_instance = self.model_class()
+        for key in result.keys():
+            model_instance.__setattr__(str(key), result[key])
+        return model_instance
 
 
 class MetaModel(type):
@@ -74,72 +77,6 @@ class MetaModel(type):
         return cls._get_manager()
 
 
-class Field:
-    # TODO add a pk param
-    val = None
-
-    null = False
-
-    def __init__(self, null=False):
-        if not isinstance(null, bool):
-            raise exceptions.DBException("null parameter must be boolean")
-        self.null = null
-
-    def get_val(self):
-        return self.val
-
-    def set_val(self, val):
-        self.validate_contain(val)
-        self.val = val
-
-    def validate_contain(self, val):
-        # In parent class u can put everything
-        return True
-
-
-class IntegerField(Field):
-
-    def validate_contain(self, val):
-        if not self.null and val is None:
-            raise exceptions.DBException("Not nullable field cant get None value")
-        if val is not None:
-            if not isinstance(val, int):
-                raise exceptions.DBException("Value must be an integer")
-
-
-class FloatField(Field):
-
-    def validate_contain(self, val):
-        if not self.null and val is None:
-            raise exceptions.DBException("Not nullable field cant get None value")
-        if val is not None:
-            if not isinstance(val, float):
-                raise exceptions.DBException("Value must be a float")
-
-
-class CharField(Field):
-    max_length = 255
-
-    def __init__(self, null=False, max_length=255):
-        if not isinstance(null, bool):
-            raise exceptions.DBException("null parameter must be boolean")
-        if not isinstance(max_length, int):
-            raise exceptions.DBException("max_length parameter must be integer")
-        if max_length > 255:
-            raise exceptions.DBException("max_length can't be greater than 255")
-        self.null = null
-        self.max_length = max_length
-
-    def validate_contain(self, val):
-        if not self.null and val is None:
-            raise exceptions.DBException("Not nullable field cant get None value")
-        if val is not None:
-            if not isinstance(val, str):
-                raise exceptions.DBException("Value must be a string")
-            if len(val) > self.max_length:
-                raise exceptions.DBException("String length can't be greater than max_length parameter")
-
-
 class BaseModel(metaclass=MetaModel):
     table_name = ""
     id = IntegerField(null=False)
@@ -148,23 +85,53 @@ class BaseModel(metaclass=MetaModel):
     def pk(self):
         return self.id
 
-    def __init__(self):
-        self.id = IntegerField(null=False)
-        self.id = 0
+    def save(self):
+        cursor = db.db_connection()
+        db_dict = [item for item in self.__dir__() if isinstance(self.__dict__.get(item), Field) or item == "id"]
+        is_new = False if "id" in db_dict else True
+        if not is_new:
+            if self.__dict__.get("id") is not None:
+                cur_instance = self.__class__.objects.get(id=self.__getattribute__("id"))
+                if cur_instance is None or cur_instance.id == 0:
+                    is_new = True
 
-    # TODO understand if we need this
-    # def __new__(cls, *args, **kwargs):
-    #     print("----------")
-    #     rv = super().__new__(cls, *args, **kwargs)
-    #     for field in rv.__class__.__dict__:
-    #         field_value = rv.__class__.__dict__.get(field)
-    #         if isinstance(field_value, Field):
-    #             swap_class = field_value.__class__()
-    #             print(swap_class)
-    #             for item in field_value.__dict__:
-    #                 print(item)
-    #     print("----------")
-    #     return rv
+        if is_new:
+            columns = ", ".join(db_dict)
+            values_dict = []
+            for item in db_dict:
+                values_dict.append(self.__dict__.get(item).get_sql_value())
+            values = ", ".join(str(item) if item else "null" for item in values_dict)
+            query = f"INSERT INTO {self.table_name} ({columns}) VALUES ({values})"
+
+        else:
+            cur_instance_id = self.__getattribute__("id")
+            values_list = []
+            for item in db_dict:
+                if item == "id":
+                    continue
+                values_list.append(f"{item} = {self.__dict__.get(item).get_sql_value()}")
+            values = ', '.join(values_list)
+            query = f"UPDATE {self.table_name} SET {values} WHERE id={cur_instance_id}"
+
+        cursor.execute(query)
+        cursor.connection.commit()
+
+    def __init__(self):
+        self.id = 1
+
+    def __new__(cls, *args, **kwargs):
+        rv = super().__new__(cls, *args, **kwargs)
+        for field in rv.__dir__():
+            field_value = rv.__class__.__dict__.get(field)
+            if isinstance(field_value, Field) or field == "id":
+                if field == "id":
+                    rv.__setattr__(field, 1)
+                    continue
+                swap_class = field_value.__class__()
+                for item in field_value.__dict__.keys():
+                    swap_class.__setattr__(item, field_value.__dict__[item])
+                rv.__dict__[field] = swap_class
+        return rv
 
     def __getattribute__(self, item):
         if object.__getattribute__(self, item).__class__.__base__ == Field:
@@ -172,10 +139,13 @@ class BaseModel(metaclass=MetaModel):
         return object.__getattribute__(self, item)
 
     def __setattr__(self, key, value):
-        if self.__class__.__dict__.get(key).__class__.__base__ == Field:
+        if self.__class__.__dict__.get(key).__class__.__base__ == Field or key == "id":
+            main_class = self.__class__.__dict__.get(key)
+            main_class = main_class if main_class else self.__class__.__base__.__dict__.get(key)
             swap_class = self.__class__.__dict__.get(key).__class__()
-            for item in self.__class__.__dict__.get(key).__dict__:
-                swap_class.__dict__[item] = self.__class__.__dict__.get(key).__dict__[item]
+            swap_class = swap_class if swap_class else self.__class__.__base__.__dict__.get(key).__class__()
+            for item in main_class.__dict__:
+                swap_class.__dict__[item] = main_class.__dict__[item]
             super(BaseModel, self).__setattr__(key, swap_class)
             swap_class.set_val(value)
             return
@@ -189,20 +159,3 @@ class Employee(BaseModel):
     symbol = CharField(null=False, max_length=100)
     qty = FloatField(null=False)
     price = FloatField(null=False)
-
-
-# teste = Employee()
-# teste1 = Employee()
-# teste.late = "e"
-# teste1.late = "g"
-# print(f"Object: {teste.late}, value: {teste.late}")
-# print(f"Object: {teste1.late}, value: {teste1.late}")
-
-
-# print(teste.late.val)
-# teste.late = "1"
-# print(teste.late.val)
-
-
-cur_employee = Employee.objects.exclude(id=0, trans='3')[0]
-print(cur_employee.__dict__)
