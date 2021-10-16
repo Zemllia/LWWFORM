@@ -169,5 +169,4 @@ class Employee(BaseModel):
 
 
 if __name__ == "__main__":
-    cur_employee = Employee.objects.get(id=3)
-    cur_employee.remove()
+    print(BaseModel.__subclasses__())

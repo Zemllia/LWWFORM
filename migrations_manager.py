@@ -1,9 +1,10 @@
+import datetime
 from os import listdir
 import importlib.util
 from os.path import isfile, join
 
 import db
-import db_engines
+from models import BaseModel
 
 
 class MigrationManager:
@@ -26,94 +27,137 @@ class MigrationManager:
             module.run_migration()
             print("Successfully migrated")
 
-    def create_model(self, model):
-        table_name = model.table_name if model.table_name and model.table_name != '' else type(model).__name__
-        table_columns = [item for item in set(list(model.__dict__) + list(model.__base__.__dict__)) if not item.startswith("__")]
-        table_columns.remove('pk')
-        table_columns.remove("table_name")
-        table_columns.remove("save")
-        table_columns_pregen = []
-        for item in table_columns:
-            if item == "id":
-                table_columns_pregen.append(model.__base__.__dict__[item].get_table_creation_parameters(item))
-                continue
-            table_columns_pregen.append(model.__dict__[item].get_table_creation_parameters(item))
-
-        table_columns_query = ', '.join(table_columns_pregen)
-
-        query = f"CREATE TABLE {table_name} ({table_columns_query})"
-        cursor = db.db_connection()
-        cursor.execute(query)
-        cursor.connection.commit()
-
-    def remove_model(self, table_name):
-        query = f"DROP TABLE {table_name}"
-        cursor = db.db_connection()
-        cursor.execute(query)
-        cursor.connection.commit()
-
-    def add_field(self, model, field):
-        table_name = model.table_name if model.table_name and model.table_name != '' else type(model).__name__
-        table_columns = [item for item in set(list(model.__dict__) + list(model.__base__.__dict__)) if
-                         not item.startswith("__")]
-        table_columns.remove('pk')
-        table_columns.remove("table_name")
-        table_columns.remove("save")
-        new_column_name = ""
-        for item in table_columns:
-            if item == "id":
-                continue
-            if model.__dict__[item] == field:
-                new_column_name = item
-        query = f"ALTER TABLE {table_name} ADD {field.get_table_creation_parameters(new_column_name)}"
-        cursor = db.db_connection()
-        cursor.execute(query)
-        cursor.connection.commit()
-
-    def remove_field(self, model, field_name):
-        if db.DB_SETTINGS.get("DB_ENGINE") == db_engines.SQLITE3:
-            self._remove_field_sqlite(model, field_name)
+    def make_migrations(self):
+        db_structure = self._generate_current_db_structure_from_db()
+        models_structure = self._generate_current_db_structure_from_models()
+        instructions = self._generate_instructions(db_structure, models_structure)
+        if len(instructions.get("create").keys()) == 0 and len(instructions.get("delete").keys()) == 0:
+            print("Everything up to date")
             return
-        self._remove_field_other(model, field_name)
+        actions = self._generate_actions(instructions)
+        self._generate_template(actions)
 
-    def _remove_field_sqlite(self, model, field_name):
-        table_name = model.table_name if model.table_name and model.table_name != '' else type(model).__name__
+    def _generate_current_db_structure_from_db(self):
         cursor = db.db_connection()
-        query = f"ALTER TABLE {table_name} RENAME TO {table_name}_old"
+        query = "SELECT name FROM sqlite_master"
         cursor.execute(query)
+        table_names = []
+        for item in cursor.fetchall():
+            table_names += [key for key in item if "sqlite_" not in str(key)]
+        tables = {}
+        for table_name in table_names:
+            query = f"PRAGMA table_info({table_name})"
+            cursor.execute(query)
+            result = cursor.fetchall()
+            table_columns = {}
+            for column_info in result:
+                table_columns[column_info['name']] = {
+                    "type": column_info['type'],
+                    "null": column_info['notnull'] != 1,
+                    "default": column_info['dflt_value'],
+                    "pk": column_info['pk'] == 1,
+                }
+            tables[table_name] = table_columns
+        return tables
 
-        table_columns = [item for item in set(list(model.__dict__) + list(model.__base__.__dict__)) if
-                         not item.startswith("__")]
-        table_columns.remove('pk')
-        table_columns.remove("table_name")
-        table_columns.remove("save")
-        table_columns.remove(field_name)
-        table_columns_pregen = []
-        for item in table_columns:
-            if item == "id":
-                table_columns_pregen.append(model.__base__.__dict__[item].get_table_creation_parameters(item))
-                continue
-            table_columns_pregen.append(model.__dict__[item].get_table_creation_parameters(item))
+    def _generate_current_db_structure_from_models(self):
+        tables = {}
+        for model in BaseModel.__subclasses__():
+            model_fields = dict(model.__dict__)
+            model_fields.pop('__module__')
+            model_fields.pop('table_name')
+            model_fields.pop('__doc__')
+            model_fields["id"] = model.__base__.__dict__["id"]
+            columns_info = {}
+            for key in model_fields:
+                column_info = dict(model_fields[key].__dict__)
+                column_info["sql_type"] = model_fields[key].__class__.__dict__["sql_type"]
+                columns_info[key] = {
+                    "type": column_info['sql_type'],
+                    "null": column_info['null'],
+                    "default": column_info['default'],
+                    "pk": column_info['pk'] if column_info.get('pk') else False,
+                }
+            tables[model.table_name] = columns_info
+        return tables
 
-        table_columns_query = ', '.join(table_columns_pregen)
+    def _generate_instructions(self, db_structure, models_structure):
+        instructions = {
+            "create": {
 
-        query = f"CREATE TABLE {table_name} ({table_columns_query})"
-        cursor = db.db_connection()
-        cursor.execute(query)
-        new_table_sql_fields = ', '.join(table_columns)
-        cursor.execute(f"INSERT INTO {table_name} SELECT {new_table_sql_fields} FROM {table_name}_old")
-        cursor.execute(f"DROP TABLE {table_name}_old")
-        cursor.connection.commit()
+            },
+            "delete": {
 
-    def _remove_field_other(self, model, field_name):
-        table_name = model.table_name if model.table_name and model.table_name != '' else type(model).__name__
-        query = f"ALTER TABLE {table_name} DROP COLUMN {field_name};"
-        cursor = db.db_connection()
-        cursor.execute(query)
-        cursor.connection.commit()
+            }
+        }
+        for table_name in models_structure:
+            if table_name not in db_structure:
+                instructions["create"][table_name] = {"data": models_structure[table_name], "type": "table"}
+            else:
+                db_column_structure = db_structure[table_name]
+                model_column_structure = models_structure[table_name]
+                for column_name in model_column_structure:
+                    if not column_name in db_column_structure:
+                        instructions["create"][column_name] = {"data": model_column_structure[column_name],
+                                                               "type": "column",
+                                                               "table_name": table_name}
+                    else:
+                        db_structure[table_name].pop(column_name)
+                for column_to_delete_name in db_structure[table_name]:
+                    instructions["delete"][column_to_delete_name] = {"type": "column", "table_name": table_name}
+                db_structure.pop(table_name)
+        for table_to_delete_name in db_structure:
+            instructions["delete"][table_to_delete_name] = {"type": "table"}
+        return instructions
+
+    def _generate_actions(self, instructions):
+        delete_actions = instructions["delete"]
+        create_actions = instructions["create"]
+        query_first = []
+        query_second = []
+        query_third = []
+        query_last = []
+        for item in delete_actions.keys():
+            if delete_actions[item].get("type") == "column":
+                query_first.append(
+                    f"""
+    delete_column(\"{delete_actions[item].get("table_name")}\", \"{item}\")
+                    """
+                )
+            elif delete_actions[item].get("type") == "table":
+                query_third.append(
+                    f"""
+    delete_table(\"{item}\")
+                    """
+                )
+        for item in create_actions.keys():
+            if create_actions[item].get("type") == "column":
+                query_second.append(
+                    f"""
+    add_column(\"{create_actions[item].get("table_name")}\", \"{item}\", {create_actions[item].get("data")})
+                    """
+                )
+            elif create_actions[item].get("type") == "table":
+                query_last.append(
+                    f"""
+    create_table(\"{item}\", {create_actions[item].get("data")})
+                    """
+                )
+        return query_first + query_second + query_third + query_last
+
+    def _generate_template(self, actions):
+        raw_migration_template_file = open("templates/migration_template.txt", "r")
+        raw_migration_template = raw_migration_template_file.read()
+        actions_query = ''.join(actions)
+        generation_time = datetime.datetime.now().strftime("%b %d %Y %H:%M:%S")
+        generation_time_for_name = datetime.datetime.now().strftime("%d%m%Y%H_%M_%S")
+        raw_migration_template = raw_migration_template.replace("_!_generation_date_!_", generation_time)
+        raw_migration_template = raw_migration_template.replace("_!_imports_!_", "")
+        raw_migration_template = raw_migration_template.replace("_!_actions_!_", actions_query)
+        new_template = open(f"migrations/automigration_{generation_time_for_name}.py", "w")
+        new_template.write(raw_migration_template)
 
 
 if __name__ == "__main__":
     mm = MigrationManager()
-    mm.migrate()
-
+    mm.make_migrations()

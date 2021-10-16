@@ -1,4 +1,5 @@
 import exceptions
+import fields
 from exceptions import QuerySetException
 from fields import Field
 
