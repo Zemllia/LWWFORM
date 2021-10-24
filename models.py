@@ -160,12 +160,13 @@ class BaseModel(metaclass=MetaModel):
         super(BaseModel, self).__setattr__(key, value)
 
 
-class Employee(BaseModel):
-    table_name = "employees"
-    first_name = fields.CharField()
-    last_name = fields.CharField()
-    salary = fields.FloatField(null=True)
-    age = fields.IntegerField()
+class User(BaseModel):
+    table_name = 'user'
+    first_name = fields.CharField(null=False)
+    last_name = fields.CharField(null=False)
+    patronymic = fields.CharField(null=False)
+    # age = IntegerField(null=False)
+
 
 
 if __name__ == "__main__":
