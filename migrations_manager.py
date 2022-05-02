@@ -1,5 +1,6 @@
 import datetime
 import json
+import sqlite3
 from os import listdir
 import importlib.util
 from os.path import isfile, join
@@ -9,7 +10,7 @@ from models import BaseModel
 
 
 class MigrationManager:
-    migrations_folder_path = "/home/zemlia/Документы/Projects/LiWeORM/migrations/"
+    migrations_folder_path = "migrations/"
 
     def __new__(cls):
         if not hasattr(cls, 'instance'):
@@ -57,7 +58,6 @@ class MigrationManager:
         db_structure = self._generate_current_db_structure_from_db()
         models_structure = self._generate_current_db_structure_from_models()
         instructions = self._generate_instructions(db_structure, models_structure)
-        print(f"instructions: {instructions}")
         if instructions is None or len(instructions.get("create").keys()) == 0 and len(instructions.get("delete").keys()) == 0:
             print("Everything up to date")
             return
@@ -145,12 +145,15 @@ class MigrationManager:
                 db_column_structure = db_structure[table_name]
                 model_column_structure = models_structure[table_name]
                 for column_name in model_column_structure:
-                    if not column_name in db_column_structure:
+                    if column_name not in db_column_structure:
                         instructions["create"][column_name] = {"data": model_column_structure[column_name],
                                                                "type": "column",
                                                                "table_name": table_name}
                     else:
                         db_structure[table_name].pop(column_name)
+                # for column_name in db_column_structure:
+                #     if column_name not in model_column_structure:
+                #         instructions["delete"][column_name] = {"type": "column", "table_name": table_name}
                 for column_to_delete_name in db_structure[table_name]:
                     instructions["delete"][column_to_delete_name] = {"type": "column", "table_name": table_name}
                 db_structure.pop(table_name)
@@ -174,19 +177,21 @@ class MigrationManager:
         migrations_data = cursor.fetchall()
         db_structure = {}
         for raw_row in migrations_data:
+            print(db_structure)
             row = dict(raw_row)
             migrations_data = json.loads(row['migration_data'].replace('\'', '"').replace('False', 'false')
                                          .replace('None', 'null').replace('True', 'true'))
             create_actions = migrations_data["create"]
             delete_actions = migrations_data["delete"]
-            print(delete_actions)
-            print(create_actions)
             for create_action in create_actions:
                 if create_actions[create_action].get("type") == "table":
                     db_structure[create_action] = create_actions[create_action]['data']
+            for create_action in create_actions:
+                if create_actions[create_action].get("type") == "column":
+                    db_structure[create_actions[create_action]["table_name"]][create_action] = create_actions[create_action]['data']
             for delete_action in delete_actions:
                 if delete_actions[delete_action].get("type") == "column":
-                    db_structure.pop(delete_action)
+                    db_structure[delete_actions[delete_action]["table_name"]].pop(delete_action)
             for delete_action in delete_actions:
                 if delete_actions[delete_action].get("type") == "table":
                     db_structure.pop(delete_action)
@@ -249,4 +254,4 @@ class MigrationManager:
 
 if __name__ == "__main__":
     mm = MigrationManager()
-    mm.make_migrations()
+    mm.migrate()

@@ -159,7 +159,7 @@ def _delete_column_sqlite(table_name, column_name):
     for raw_column in data:
         column_type = data[raw_column].get("type")
         not_null = " NOT NULL" if data[raw_column].get("null") else ""
-        default = f" DEFAULT \"{data[raw_column].get('default')}\"" if data[raw_column].get("default") else ""
+        default = f" DEFAULT {data[raw_column].get('default')}" if data[raw_column].get("default") else ""
         pk = f" PRIMARY KEY AUTOINCREMENT" if data[raw_column].get('pk') else ""
         table_columns.append(f"\"{raw_column}\" {column_type}" + not_null + default + pk)
 
@@ -167,6 +167,7 @@ def _delete_column_sqlite(table_name, column_name):
 
     query = f"CREATE TABLE {table_name} ({table_columns_query})"
     cursor = db.db_connection()
+    print(query)
     cursor.execute(query)
     new_table_sql_fields = ', '.join(list(data.keys()))
     cursor.execute(f"INSERT INTO {table_name} SELECT {new_table_sql_fields} FROM {table_name}_old")

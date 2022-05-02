@@ -165,7 +165,7 @@ class User(BaseModel):
     first_name = fields.CharField(null=False)
     last_name = fields.CharField(null=False)
     patronymic = fields.CharField(null=False)
-    # age = IntegerField(null=False)
+    age = IntegerField(null=False)
 
 
 if __name__ == "__main__":
