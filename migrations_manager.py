@@ -20,15 +20,30 @@ class MigrationManager:
         migrations_files = [f for f in listdir(self.migrations_folder_path) if isfile(join(self.migrations_folder_path, f))
                             and not f.startswith("__") and f.endswith(".py")]
         migrations_files.reverse()
+        is_something_applied = False
+        print("Start migrating")
         for file_name in migrations_files:
+            cursor = db.db_connection()
+            cursor.execute("SELECT migration_name, is_applied FROM lwwf_migrations")
+            migrations_data_raw = cursor.fetchall()
+            migrations_data = []
+            for row in migrations_data_raw:
+                if row["is_applied"] == 1 or row["is_applied"] is True:
+                    migrations_data.append(row["migration_name"])
+            if file_name.replace('.py', '') in migrations_data:
+                continue
+            is_something_applied = True
             spec = importlib.util.spec_from_file_location(file_name.replace('.py', ''),
                                                           join(self.migrations_folder_path, file_name))
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            print("Start migrating")
+
             module.run_migration()
             self._save_migration_info(file_name.replace('.py', ''))
+        if is_something_applied:
             print("Successfully migrated")
+        else:
+            print("Everything up to date")
 
     def _save_migration_info(self, migration_name):
         query = f"UPDATE lwwf_migrations SET is_applied = 1 WHERE migration_name = \"{migration_name}\""
@@ -42,6 +57,7 @@ class MigrationManager:
         db_structure = self._generate_current_db_structure_from_db()
         models_structure = self._generate_current_db_structure_from_models()
         instructions = self._generate_instructions(db_structure, models_structure)
+        print(f"instructions: {instructions}")
         if instructions is None or len(instructions.get("create").keys()) == 0 and len(instructions.get("delete").keys()) == 0:
             print("Everything up to date")
             return
@@ -108,13 +124,10 @@ class MigrationManager:
         cursor = db.db_connection()
         cursor.execute(migrations_data_query)
         migrations_count = cursor.fetchall()[0][0]
-        print(db_structure)
         if str(migrations_count) != "0":
             db_structure = self._generate_instructions_from_migrations()
         instructions = self._generate_instructions_from_db_structure(db_structure, models_structure)
-        return None
         return instructions
-
 
     def _generate_instructions_from_db_structure(self, db_structure, models_structure):
         instructions = {
@@ -152,7 +165,8 @@ class MigrationManager:
                 return None
 
         return instructions
-    #TODO check if unapllied custom migrations exists
+
+    # TODO check if unapplied custom migrations exists
     def _generate_instructions_from_migrations(self):
         migrations_data_query = "SELECT id, migration_data FROM lwwf_migrations"
         cursor = db.db_connection()
@@ -176,7 +190,7 @@ class MigrationManager:
             for delete_action in delete_actions:
                 if delete_actions[delete_action].get("type") == "table":
                     db_structure.pop(delete_action)
-        print(db_structure)
+        return db_structure
 
     def _generate_actions(self, instructions, migration_name):
         delete_actions = instructions["delete"]
@@ -231,7 +245,6 @@ class MigrationManager:
         raw_migration_template = raw_migration_template.replace("_!_actions_!_", actions_query)
         new_template = open(f"{self.migrations_folder_path}automigration_{generation_time_for_name}.py", "w")
         new_template.write(raw_migration_template)
-
 
 
 if __name__ == "__main__":

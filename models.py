@@ -168,6 +168,5 @@ class User(BaseModel):
     # age = IntegerField(null=False)
 
 
-
 if __name__ == "__main__":
     print(BaseModel.__subclasses__())
